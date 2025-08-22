@@ -1,8 +1,34 @@
 import { NextResponse } from "next/server";
+import db from "../../../db/sqlite.js";
 
 // Cache per 30 minuti
 let cache = { key: "", data: null, ts: 0 };
 const HALF_HOUR = 30 * 60 * 1000;
+const TWO_DAYS = 48 * 60 * 60 * 1000;
+
+function getCachedItem(id) {
+  return new Promise((resolve, reject) => {
+    db.get(
+      "SELECT data, lastUpdated FROM top_items WHERE id = ?",
+      [id],
+      (err, row) => {
+        if (err) reject(err);
+        else resolve(row);
+      }
+    );
+  });
+}
+
+function upsertItem(id, data, ts) {
+  return new Promise((resolve, reject) => {
+    db.run(
+      `INSERT INTO top_items (id, data, lastUpdated) VALUES (?,?,?)
+       ON CONFLICT(id) DO UPDATE SET data=excluded.data, lastUpdated=excluded.lastUpdated`,
+      [id, JSON.stringify(data), ts],
+      (err) => (err ? reject(err) : resolve())
+    );
+  });
+}
 
 export async function GET(req) {
   const url = new URL(req.url);
@@ -31,27 +57,37 @@ export async function GET(req) {
 
     const results = [];
 
-    // 2) Per ciascun item: calcolo BOM+ROI
+    // 2) Per ciascun item: calcolo BOM+ROI con cache 48h
     for (const item of craftables.slice(0, sample)) {
+      const cacheId = `${scope}|${metric}|${item.id}`;
       try {
-        const res = await fetch(
-          `${origin}/api/bom?id=${item.id}&scope=${encodeURIComponent(scope)}&metric=${encodeURIComponent(metric)}`,
-          { cache: "no-store" }
-        );
-        if (!res.ok) continue;
-        const bom = await res.json();
+        const cached = await getCachedItem(cacheId);
+        const isStale = !cached || now - cached.lastUpdated > TWO_DAYS;
 
-        if (bom?.totals?.roi != null) {
-          results.push({
-            id: item.id,
-            name: item.name,
-            sales: item.sales,
-            roi: bom.totals.roi,
-            profitPerUnit: bom.totals.profitPerUnit,
-            unitCost: bom.totals.unitMaterialCost,
-            unitMarketPrice: bom.totals.unitMarketPrice,
-            recipeId: item.recipeId,
-          });
+        if (isStale) {
+          const res = await fetch(
+            `${origin}/api/bom?id=${item.id}&scope=${encodeURIComponent(scope)}&metric=${encodeURIComponent(metric)}`,
+            { cache: "no-store" }
+          );
+          if (!res.ok) continue;
+          const bom = await res.json();
+
+          if (bom?.totals?.roi != null) {
+            const entry = {
+              id: item.id,
+              name: item.name,
+              sales: item.sales,
+              roi: bom.totals.roi,
+              profitPerUnit: bom.totals.profitPerUnit,
+              unitCost: bom.totals.unitMaterialCost,
+              unitMarketPrice: bom.totals.unitMarketPrice,
+              recipeId: item.recipeId,
+            };
+            await upsertItem(cacheId, entry, now);
+            results.push(entry);
+          }
+        } else {
+          results.push(JSON.parse(cached.data));
         }
       } catch (e) {
         console.warn("Errore calcolo BOM per", item.id, e);
