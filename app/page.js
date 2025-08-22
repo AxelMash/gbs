@@ -303,7 +303,7 @@ export default function Home() {
           <section className={T.card + " md:col-span-1"}>
             <h2 className="text-lg font-semibold mb-2">⭐ Preferiti</h2>
             {favorites.length === 0 ? (
-              <p className={T.muted}>Nessun preferito. Aggiungi con la ⭐ accanto all'item.</p>
+              <p className={T.muted}>Nessun preferito. Aggiungi con la ⭐ accanto all&apos;item.</p>
             ) : (
               <ul className={T.list}>
                 {favorites.map((f) => (
